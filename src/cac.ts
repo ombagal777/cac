@@ -403,12 +403,12 @@ export class CAC extends EventTarget {
   }
 
   runMatchedCommand(): any {
-    const { args, options, matchedCommand: command, configData } = this
+    const { args, options, matchedCommand: command } = this
 
     if (!command || !command.commandAction) return
 
-    if (configData) {
-      command.checkUnknownConfigOptions(configData)
+    if (this.configData) {
+      command.checkUnknownConfigOptions(this.configData)
     }
 
     command.checkUnknownOptions()

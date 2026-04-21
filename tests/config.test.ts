@@ -299,10 +299,7 @@ describe('error cases', () => {
     cli.config()
     cli.option('--foo <val>', 'Foo')
 
-    let threw = false
-    cli.command('build').action(() => {
-      threw = false
-    })
+    cli.command('build').action(() => {})
 
     const configFile = writeConfig('test.json', { unknownOption: 'value' })
     expect(() => {
