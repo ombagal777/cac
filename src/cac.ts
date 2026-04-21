@@ -6,6 +6,7 @@ import {
   type CommandExample,
   type HelpCallback,
 } from './command.ts'
+import { loadConfigFile } from './config.ts'
 import { runtimeProcessArgs } from './runtime.ts'
 import {
   camelcaseOptionName,
@@ -45,6 +46,8 @@ export class CAC extends EventTarget {
 
   showHelpOnExit?: boolean
   showVersionOnExit?: boolean
+  useConfigFile: boolean
+  configData?: Record<string, unknown>
 
   /**
    * @param name The program name to display in help and version message
@@ -56,6 +59,7 @@ export class CAC extends EventTarget {
     this.rawArgs = []
     this.args = []
     this.options = {}
+    this.useConfigFile = false
     this.globalCommand = new GlobalCommand(this)
     this.globalCommand.usage('<command> [options]')
   }
@@ -122,6 +126,17 @@ export class CAC extends EventTarget {
    */
   example(example: CommandExample): this {
     this.globalCommand.example(example)
+    return this
+  }
+
+  /**
+   * Enable loading default option values from a JSON config file via `--config <file>`.
+   *
+   * Precedence: CLI arguments > config values > option defaults.
+   */
+  config(description = 'Path to a JSON config file'): this {
+    this.useConfigFile = true
+    this.globalCommand.option('--config <file>', description)
     return this
   }
 
@@ -194,11 +209,35 @@ export class CAC extends EventTarget {
       this.name = argv[1] ? getFileName(argv[1]) : 'cli'
     }
 
+    // Reset config data from previous parse calls
+    this.configData = undefined
+
+    // Pre-scan for --config and load config file before main parsing
+    let configData: Record<string, unknown> | undefined
+    if (this.useConfigFile) {
+      const argvSlice = argv.slice(2)
+      const configPath = this.findConfigPath(argvSlice)
+      if (configPath) {
+        // Skip config loading when help/version flags are present to avoid
+        // interfering with those flows (e.g. bad config file should not
+        // prevent --help from working)
+        const skipConfig =
+          (this.showHelpOnExit &&
+            (argvSlice.includes('--help') || argvSlice.includes('-h'))) ||
+          (this.showVersionOnExit &&
+            (argvSlice.includes('--version') || argvSlice.includes('-v')))
+        if (!skipConfig) {
+          configData = loadConfigFile(configPath)
+          this.configData = configData
+        }
+      }
+    }
+
     let shouldParse = true
 
     // Search sub-commands
     for (const command of this.commands) {
-      const parsed = this.mri(argv.slice(2), command)
+      const parsed = this.mri(argv.slice(2), command, configData)
 
       const commandName = parsed.args[0]
       if (command.isMatched(commandName)) {
@@ -219,7 +258,7 @@ export class CAC extends EventTarget {
       for (const command of this.commands) {
         if (command.isDefaultCommand) {
           shouldParse = false
-          const parsed = this.mri(argv.slice(2), command)
+          const parsed = this.mri(argv.slice(2), command, configData)
           this.setParsedInfo(parsed, command)
           this.dispatchEvent(new CustomEvent('command:!', { detail: command }))
         }
@@ -227,7 +266,7 @@ export class CAC extends EventTarget {
     }
 
     if (shouldParse) {
-      const parsed = this.mri(argv.slice(2))
+      const parsed = this.mri(argv.slice(2), undefined, configData)
       this.setParsedInfo(parsed)
     }
 
@@ -263,6 +302,7 @@ export class CAC extends EventTarget {
   private mri(
     argv: string[],
     /** Matched command */ command?: Command,
+    configData?: Record<string, unknown>,
   ): ParsedArgv {
     // All added options
     const cliOptions = [
@@ -323,6 +363,17 @@ export class CAC extends EventTarget {
       }
     }
 
+    // Apply config values (after defaults, before CLI args) to honour precedence:
+    // CLI arguments > config values > option defaults
+    if (configData) {
+      for (const [key, value] of Object.entries(configData)) {
+        const camelKey = camelcaseOptionName(key)
+        const keys = camelKey.split('.')
+        setDotProp(options, keys, value)
+      }
+      setByType(options, transforms)
+    }
+
     // Set option values (support dot-nested property name)
     for (const key of Object.keys(parsed)) {
       if (key !== '_') {
@@ -338,10 +389,27 @@ export class CAC extends EventTarget {
     }
   }
 
+  private findConfigPath(argv: string[]): string | undefined {
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === '--config' && i + 1 < argv.length) {
+        return argv[i + 1]
+      }
+      const eqMatch = /^--config=(.+)$/.exec(argv[i])
+      if (eqMatch) {
+        return eqMatch[1]
+      }
+    }
+    return undefined
+  }
+
   runMatchedCommand(): any {
-    const { args, options, matchedCommand: command } = this
+    const { args, options, matchedCommand: command, configData } = this
 
     if (!command || !command.commandAction) return
+
+    if (configData) {
+      command.checkUnknownConfigOptions(configData)
+    }
 
     command.checkUnknownOptions()
 

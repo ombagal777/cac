@@ -2,6 +2,7 @@ import { Option, type OptionConfig } from './option.ts'
 import { runtimeInfo } from './runtime.ts'
 import {
   CACError,
+  camelcaseOptionName,
   findAllBrackets,
   findLongest,
   padRight,
@@ -283,6 +284,25 @@ export class Command {
           throw new CACError(
             `Unknown option \`${name.length > 1 ? `--${name}` : `-${name}`}\``,
           )
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if the config file contains any unknown option keys.
+   * Respects the command's `allowUnknownOptions` setting.
+   */
+  checkUnknownConfigOptions(configData: Record<string, unknown>): void {
+    const { globalCommand } = this.cli
+
+    if (!this.config.allowUnknownOptions) {
+      for (const key of Object.keys(configData)) {
+        const camelKey = camelcaseOptionName(key)
+        const rootKey = camelKey.split('.')[0]
+
+        if (!this.hasOption(rootKey) && !globalCommand.hasOption(rootKey)) {
+          throw new CACError(`Unknown config option \`${key}\``)
         }
       }
     }

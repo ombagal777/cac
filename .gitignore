@@ -3,3 +3,4 @@ dist
 coverage
 api-doc
 .eslintcache
+package-lock.json
